@@ -111,3 +111,5 @@ void PollHeadsetControl(PollContext& ctx);  // only if headsetcontrol.exe is ins
 void PollGenericHid(PollContext& ctx);
 void PollBluetooth(PollContext& ctx);
 void PollXInput(PollContext& ctx);
+
+void PollMaono(PollContext& ctx);  // MAONO PD200W receiver (352F:040E)

@@ -106,6 +106,7 @@ std::vector<DeviceStatus> PollAllDevices() {
     PollPhoneLink(ctx);
     PollGalaxyBuds(ctx);  // before the Bluetooth fallback, which skips devices already listed by name
     PollMoondrop(ctx);
+    PollMaono(ctx);  // MAONO PD200W receiver (352F:040E), experimental battery query
     PollHeadsetControl(ctx);
     PollBluetooth(ctx);   // before the generic HID check: Windows' own level wins for the same device
     PollGenericHid(ctx);

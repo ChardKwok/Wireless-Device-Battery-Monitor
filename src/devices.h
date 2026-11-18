@@ -2,7 +2,7 @@
 #include <string>
 #include <vector>
 
-enum class DeviceKind { Other, Mouse, Headset, Keyboard, Gamepad, Phone };
+enum class DeviceKind { Other, Mouse, Headset, Keyboard, Gamepad, Phone, Microphone };
 
 // One battery-powered device, as seen during a single poll.
 struct DeviceStatus {
