@@ -4,8 +4,10 @@
 // VID:PID 352F:040E, interface 3, usage page/usage 000C:0001,
 // input/output reports 64 bytes, no feature reports.
 // Battery register 0x0042 tracks the vendor software's battery level
-// as the battery discharges. If the mic stops answering, the receiver must
-// stay claimed so the generic HID fallback cannot report a spurious 0%.
+// as the battery discharges. The owner also reports 0% while the mic is off
+// but the receiver is plugged in; suppress zero readings on this receiver.
+// Keep the receiver claimed even without a reply so the generic HID fallback
+// cannot report a spurious 0%.
 //
 // PD200W transport reference (documented for a different PID, 352F:0411):
 // https://github.com/iamsh4/maomao/blob/main/protocol-pd200w.md
@@ -183,10 +185,16 @@ void PollMaono(PollContext &ctx)
         status.name = L"MAONO PD200W";
         status.kind = DeviceKind::Microphone;
         status.via = L"2.4 GHz receiver";
-        status.percent = percent;
+        // Receiver-specific workaround for the owner's powered-off 0% report.
+        // A valid battery reply proves the USB receiver is reachable, not that
+        // the wireless mic is on. No independent link-state register is verified,
+        // so zero is unavailable/offline here; this also hides a genuinely empty
+        // battery. Do not apply this rule to other receivers or device drivers.
+        status.connected = percent != 0;
+        status.percent = status.connected ? percent : -1;
 
-        // Charging and link-state registers are not established.
-        // Do not infer either state from the battery percentage.
+        // Charging status remains unknown. An explicit disconnected status
+        // hides both taskbar and tray entries, even if a previous level is cached.
         ctx.Add(status, kVid, kPid);
         return;
     }
