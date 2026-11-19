@@ -63,6 +63,22 @@ void HiddenAndClaimed(PollContext& ctx) {
     GenericFallback(ctx);
     CHECK(ctx.out.empty());
 }
+void ZeroReplyIsOffline(PollContext& ctx) {
+    PollMaono(ctx);
+    CHECK(ctx.IsClaimed(0x352F, 0x040E));
+    CHECK(ctx.out.size() == 1);
+    if (ctx.out.size() == 1) {
+        const auto& s = ctx.out[0];
+        // Both tray and taskbar visibility use connected; percent=-1 alone
+        // would merely dim the previous reading and leave the icon visible.
+        CHECK(!s.connected && s.percent == -1 && !s.asleep);
+        CHECK(!s.charging && s.graceSec == 0);
+        CHECK(s.kind == DeviceKind::Microphone);
+        CHECK(s.key == L"maono:pd200w:maono-receiver");
+    }
+    GenericFallback(ctx);
+    CHECK(ctx.out.size() == 1);
+}
 }  // namespace
 
 bool HidDev::Open(const HidColl& c) { ++opens; c_ = c; return openOk; }
@@ -87,8 +103,8 @@ int HidDev::Read(std::vector<BYTE>& out, int timeoutMs) {
 }
 
 int main() {
-    current = "connected, real zero, low and full battery";
-    for (unsigned percent : {0u, 1u, 15u, 64u, 100u}) {
+    current = "connected, low and full battery";
+    for (unsigned percent : {1u, 15u, 64u, 100u}) {
         auto ctx = Context(); replies = { Battery(percent) };
         PollMaono(ctx);
         CHECK(ctx.out.size() == 1 && ctx.IsClaimed(0x352F, 0x040E));
@@ -105,8 +121,15 @@ int main() {
         CHECK(ctx.out.size() == 1 && opens == 1 && writes == 1);
     }
 
+    current = "start with mic off: valid vendor zero reply must be hidden";
+    auto ctx = Context(); replies = { Battery(0) };
+    ZeroReplyIsOffline(ctx);
+    CHECK(opens == 1 && flushes == 1 && writes == 1 && reads == 1);
+    PollMaono(ctx);
+    CHECK(ctx.out.size() == 1 && opens == 1 && writes == 1);
+
     current = "mic off, receiver present: no generic zero battery entry";
-    auto ctx = Context();
+    ctx = Context();
     HiddenAndClaimed(ctx);
     CHECK(writes == 1 && reads == 1);
 
@@ -121,11 +144,22 @@ int main() {
     current = "connected, disconnected, reconnected with same identity";
     ctx = Context(); replies = { Battery(64) }; PollMaono(ctx);
     const auto connected = ctx.out;
+    for (int poll = 0; poll < 3; ++poll) {
+        ctx = Context(); replies = { Battery(0) }; ZeroReplyIsOffline(ctx);
+        if (ctx.out.size() == 1 && connected.size() == 1)
+            CHECK(ctx.out[0].key == connected[0].key);
+    }
     ctx = Context(); HiddenAndClaimed(ctx);
     ctx = Context(); replies = { Battery(58) }; PollMaono(ctx);
     CHECK(ctx.out.size() == 1 && connected.size() == 1);
     if (ctx.out.size() == 1 && connected.size() == 1)
-        CHECK(ctx.out[0].key == connected[0].key && ctx.out[0].percent == 58);
+        CHECK(ctx.out[0].key == connected[0].key && ctx.out[0].percent == 58 && ctx.out[0].connected);
+
+    current = "zero workaround must not hide a reconnected 1 percent mic";
+    ctx = Context(); replies = { Battery(0) }; ZeroReplyIsOffline(ctx);
+    ctx = Context(); replies = { Battery(1) }; PollMaono(ctx);
+    CHECK(ctx.out.size() == 1);
+    if (ctx.out.size() == 1) CHECK(ctx.out[0].connected && ctx.out[0].percent == 1);
 
     current = "unplugged receiver is absent and not claimed";
     ctx = Context(); ctx.colls.clear(); PollMaono(ctx);
@@ -173,6 +207,7 @@ int main() {
     ctx = Context(); replies = invalid; replies.push_back(Battery(42)); PollMaono(ctx);
     CHECK(ctx.out.size() == 1);
     if (ctx.out.size() == 1) CHECK(ctx.out[0].percent == 42);
+    ctx = Context(); replies = invalid; replies.push_back(Battery(0)); ZeroReplyIsOffline(ctx);
 
     current = "battery register may follow other register pairs";
     auto multi = Battery(0, 0x0044);
@@ -181,6 +216,8 @@ int main() {
     ctx = Context(); replies = { multi }; PollMaono(ctx);
     CHECK(ctx.out.size() == 1);
     if (ctx.out.size() == 1) CHECK(ctx.out[0].percent == 37);
+    multi[11] = 0; FixChecksum(multi);
+    ctx = Context(); replies = { multi }; ZeroReplyIsOffline(ctx);
 
     current = "continuous unrelated reports cannot extend query indefinitely";
     ctx = Context(); replies = { Battery(64, 0x0044) }; repeatReply = true;
@@ -189,5 +226,5 @@ int main() {
     CHECK(reads <= 128 && GetTickCount64() - start < 1500);
 
     if (failures) { std::printf("MAONO: %d failed checks\n", failures); return 1; }
-    std::puts("MAONO tests passed (offline fallback, reconnect, microphone kind, real zero, strict matching, malformed, GET-only).");
+    std::puts("MAONO tests passed (vendor zero/offline, fallback, reconnect, microphone kind, low battery, strict matching, malformed, GET-only).");
 }
