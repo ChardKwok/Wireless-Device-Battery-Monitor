@@ -25,6 +25,10 @@ clean:
 
 test:
 	@mkdir -p build
+	$(CXX) $(CXXFLAGS) tests/rog_headset_driver_test.cpp src/drivers/rog.cpp -o build/rog_headset_driver_test.exe
+	./build/rog_headset_driver_test.exe
+	$(CXX) $(CXXFLAGS) tests/maono_driver_test.cpp src/drivers/maono.cpp -o build/maono_driver_test.exe
+	./build/maono_driver_test.exe
 	$(CXX) $(CXXFLAGS) tests/astro_driver_test.cpp src/drivers/astro.cpp -o build/astro_driver_test.exe
 	./build/astro_driver_test.exe
 	$(CXX) $(CXXFLAGS) tests/steelseries_mouse_test.cpp src/drivers/steelseries.cpp -o build/steelseries_mouse_test.exe

@@ -71,7 +71,7 @@ void PollSonix(PollContext& ctx);     // SONiX keyboards on their 2.4 GHz dongle
 void PollFractal(PollContext& ctx);   // Fractal Design Scape headset (dongle or cable)
 void PollJabra(PollContext& ctx);     // Jabra headsets behind a Link 380 / 390 dongle
 void PollJbl(PollContext& ctx);       // JBL Quantum 520 / 650 / 850 / 950 wireless headsets
-void PollRog(PollContext& ctx);       // ASUS ROG keyboards, mice and the Pelta headset
+void PollRog(PollContext& ctx);       // ASUS ROG keyboards, mice and Pelta / Delta II headsets
 void PollZowie(PollContext& ctx);     // BenQ ZOWIE EC-CW / DW / U2 mice
 void PollRoyalKludge(PollContext& ctx);  // Royal Kludge MG6 Pro (VID 2E3C, QiWang protocol)
 void PollMchoseG3(PollContext& ctx);  // MCHOSE G3 V2 wireless mouse (VID 3837)
@@ -111,3 +111,5 @@ void PollHeadsetControl(PollContext& ctx);  // only if headsetcontrol.exe is ins
 void PollGenericHid(PollContext& ctx);
 void PollBluetooth(PollContext& ctx);
 void PollXInput(PollContext& ctx);
+
+void PollMaono(PollContext& ctx);  // MAONO PD200W receiver (352F:040E)
