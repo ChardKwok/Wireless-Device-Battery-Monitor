@@ -1,4 +1,4 @@
-// ASUS ROG wireless keyboards, mice and the ROG Pelta headset (VID 0B05), including the ROG Omni Receiver (0B05:1ACE).
+// ASUS ROG wireless keyboards, mice and the ROG Pelta / Delta II headsets (VID 0B05), including the ROG Omni Receiver (0B05:1ACE).
 // Query: [report id][12][sub]   sub 01 = keyboard battery, sub 07 = mouse battery.
 // Reply: [report id][12][sub]...  keyboard: [6] % (Falchion: [11]), [9] == 1 charging
 //                                 mouse:    [5] level (x25 on older 0-4 gauges), [10] charging
@@ -185,54 +185,100 @@ void PollOmni(PollContext& ctx, std::vector<std::wstring>& seen) {
 // (CC 12 0E / 09 ...) are skipped by matching the echoed command byte.
 // Protocol from github.com/jimm0thy/pelta-control (MIT), github.com/B1Chat/BatteryWatch (MIT) and
 // github.com/TheWebDog/quiet-battery/issues/1.
-constexpr USHORT kPeltaPid = 0x1B84;
+// Delta II uses the same CC 12 07 / 08 protocol, confirmed by another owner:
+// https://github.com/krisgfx9/Wireless-Device-Battery-Monitor/issues/231#issuecomment-6959669223
+// The current owner's dump matches 0B05:1AFA, if3 FF00:0001, 64/64/0.
+struct HeadsetModel {
+    USHORT pid;
+    const wchar_t* name;
+};
+const HeadsetModel kHeadsets[] = {
+    { 0x1B84, L"ROG Pelta" },
+    { 0x1AFA, L"ROG DELTA II" },
+};
 
-Reply PeltaQuery(HidDev& d, BYTE cmd, std::vector<BYTE>& reply) {
+Reply HeadsetQuery(HidDev& d, BYTE cmd, std::vector<BYTE>& reply, ULONGLONG end, bool writeFallback) {
     d.Flush();
-    // The first answer after the headset reconnects can take ~750 ms.
-    ULONGLONG end = GetTickCount64() + 1200;
+    auto remaining = [&]() {
+        auto now = GetTickCount64();
+        return now < end ? static_cast<int>(end - now) : 0;
+    };
+    int left = remaining();
+    if (!left) return Reply::None;
     std::vector<BYTE> r;
-    int n = d.SetOutputAndRead({ 0xCC, 0x12, cmd }, r, 1200);
-    while (n >= 8) {
-        if (r[0] == 0xCC && r[1] == 0xFF && r[2] == 0xAA) return Reply::Asleep;
-        if (r[0] == 0xCC && r[1] == 0x12) {
-            if (r[5] == 0xFF && r[6] == 0xAA) return Reply::Asleep;
-            if (r[2] == cmd) { reply = r; return Reply::Ok; }
+    int n = d.SetOutputAndRead({ 0xCC, 0x12, cmd }, r, left);
+    // Some Delta II firmware accepts interrupt OUT instead of SET_REPORT. Retry
+    // only this same read-only query and only within the original deadline.
+    left = remaining();
+    if (n < 0 && writeFallback && left > 0 &&
+        d.Write({ 0xCC, 0x12, cmd }, left < 250 ? left : 250)) {
+        left = remaining();
+        if (left > 0) n = d.Read(r, left);
+    }
+    for (int reports = 0; n >= 0 && reports < 128 && remaining() > 0; ++reports) {
+        if (r.size() >= 3 && r[0] == 0xCC) {
+            if (r[1] == 0xFF && r[2] == 0xAA) return Reply::Asleep;
+            if (r.size() >= 8 && r[1] == 0x12 && r[2] == cmd) {
+                if (r[5] == 0xFF && r[6] == 0xAA) return Reply::Asleep;
+                reply = r;
+                return Reply::Ok;
+            }
         }
-        int left = (int)((LONGLONG)end - (LONGLONG)GetTickCount64());
-        if (left <= 0) break;
+        left = remaining();
+        if (left <= 0 || reports == 127) break;
         n = d.Read(r, left);
     }
     return Reply::None;
 }
 
-void PollPelta(PollContext& ctx) {
-    if (ctx.IsClaimed(0x0B05, kPeltaPid)) return;
-    auto colls = ctx.Find(0x0B05, kPeltaPid, [](const HidColl& c) {
-        return c.iface == 3 && c.page() == 0xFF00 && c.usage() == 0x0001 && c.inLen() >= 8 && c.outLen() >= 8;
-    });
-    for (const HidColl* c : colls) {
-        HidDev d;
-        std::vector<BYTE> r;
-        if (!d.Open(*c)) continue;
-        Reply res = PeltaQuery(d, 0x07, r);
-        if (res == Reply::None) continue;
-        DeviceStatus s;
-        s.key = L"rog:" + Hex4(kPeltaPid) + L":hs";
-        s.name = L"ROG Pelta";
-        s.kind = DeviceKind::Headset;
-        s.via = L"2.4 GHz receiver";
-        if (res == Reply::Asleep) {
-            s.asleep = true;
-        } else {
-            if (r[6] <= 100) s.percent = r[6];
-            else s.asleep = true;  // FE = level not known yet
-            std::vector<BYTE> ch;
-            if (PeltaQuery(d, 0x08, ch) == Reply::Ok) s.charging = ch[5] == 1;
+void PollHeadsets(PollContext& ctx) {
+    for (const auto& model : kHeadsets) {
+        if (ctx.IsClaimed(0x0B05, model.pid)) continue;
+        const bool delta = model.pid == 0x1AFA;
+        auto colls = ctx.Find(0x0B05, model.pid, [&](const HidColl& c) {
+            if (c.iface != 3 || c.page() != 0xFF00 || c.usage() != 0x0001) return false;
+            // Only use the collection in the supplied Delta II dump, not its
+            // FF13:0001 collection or the consumer/telephony controls.
+            return delta ? c.inLen() == 64 && c.outLen() == 64 && c.featLen() == 0 :
+                           c.inLen() >= 8 && c.outLen() >= 8;
+        });
+        if (colls.empty()) continue;
+        // Keep an offline Delta II receiver out of generic HID fallback too.
+        if (delta) ctx.Claim(0x0B05, model.pid);
+        for (const HidColl* c : colls) {
+            HidDev d;
+            std::vector<BYTE> r;
+            if (!d.Open(*c)) continue;
+            // Delta II: one 1-second budget for battery, charging and fallback.
+            // Pelta keeps its existing 1200-ms allowance per query: its first
+            // response after reconnecting can take about 750 ms.
+            const auto end = GetTickCount64() + (delta ? 1000 : 1200);
+            Reply res = HeadsetQuery(d, 0x07, r, end, delta);
+            if (res == Reply::None) continue;
+            if (delta && res == Reply::Ok && r[6] > 100 && r[6] != 0xFE) continue;
+            DeviceStatus s;
+            s.key = L"rog:" + Hex4(model.pid) + L":hs";
+            s.name = model.name;
+            s.kind = DeviceKind::Headset;
+            s.via = L"2.4 GHz receiver";
+            if (res == Reply::Asleep) {
+                if (delta) s.connected = false;
+                else s.asleep = true;
+            } else {
+                if (r[6] <= 100) s.percent = r[6];
+                else s.asleep = true;  // FE = level not known yet, not 0%
+                std::vector<BYTE> ch;
+                Reply charge = HeadsetQuery(d, 0x08, ch, delta ? end : GetTickCount64() + 1200, delta);
+                if (charge == Reply::Ok) s.charging = ch[5] == 1;
+                else if (delta && charge == Reply::Asleep) {
+                    s.connected = false;
+                    s.percent = -1;
+                    s.asleep = false;
+                }
+            }
+            ctx.Add(s, 0x0B05, model.pid);
+            break;
         }
-        ctx.out.push_back(s);
-        ctx.Claim(0x0B05, kPeltaPid);
-        return;
     }
 }
 
@@ -240,7 +286,7 @@ void PollPelta(PollContext& ctx) {
 
 void PollRog(PollContext& ctx) {
     std::vector<std::wstring> seen;  // one entry per device name (wired + receiver both present while charging)
-    PollPelta(ctx);
+    PollHeadsets(ctx);
     PollOmni(ctx, seen);
     for (const Model& m : kModels) {
         if (ctx.IsClaimed(0x0B05, m.pid)) continue;
